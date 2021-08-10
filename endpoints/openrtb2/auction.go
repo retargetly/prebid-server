@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
-	jsonpatch "github.com/evanphx/json-patch"
+	"github.com/evanphx/json-patch"
 	"github.com/gofrs/uuid"
 	"github.com/golang/glog"
 	"github.com/julienschmidt/httprouter"
@@ -24,6 +24,7 @@ import (
 	accountService "github.com/prebid/prebid-server/account"
 	"github.com/prebid/prebid-server/analytics"
 	"github.com/prebid/prebid-server/config"
+	"github.com/prebid/prebid-server/endpoints/openrtb2/firstpartydata"
 	"github.com/prebid/prebid-server/errortypes"
 	"github.com/prebid/prebid-server/exchange"
 	"github.com/prebid/prebid-server/metrics"
@@ -136,6 +137,27 @@ func (deps *endpointDeps) Auction(w http.ResponseWriter, r *http.Request, _ http
 	}()
 
 	req, impExtInfoMap, errL := deps.parseRequest(r)
+	req, fpdData, errL := deps.parseRequest(r)
+
+	var resolvedFPD map[openrtb_ext.BidderName]*openrtb_ext.FPDData
+	reqExt, _ := req.GetRequestExt()
+	if reqExt != nil {
+		if reqExt.GetPrebid() != nil {
+			fpdBidderData, reqExtPrebid := firstpartydata.PreprocessFPD(*reqExt.GetPrebid())
+			reqExt.SetPrebid(&reqExtPrebid)
+
+			var fpdErrors []error
+			initialFPD, buildFpdErr := firstpartydata.BuildFPD(req.BidRequest, fpdBidderData, fpdData)
+			if len(buildFpdErr) > 0 {
+				errL = append(errL, buildFpdErr...)
+			} else {
+				resolvedFPD, fpdErrors = deps.validateFpdRequest(req.BidRequest, initialFPD)
+				if len(fpdErrors) > 0 {
+					errL = append(errL, fpdErrors...)
+				}
+			}
+		}
+	}
 
 	if errortypes.ContainsFatalError(errL) && writeError(errL, w, &labels) {
 		return
@@ -193,6 +215,7 @@ func (deps *endpointDeps) Auction(w http.ResponseWriter, r *http.Request, _ http
 		Warnings:                   warnings,
 		GlobalPrivacyControlHeader: secGPC,
 		ImpExtInfoMap:              impExtInfoMap,
+		FirstPartyData:             resolvedFPD,
 	}
 
 	response, err := deps.ex.HoldAuction(ctx, auctionRequest, nil)
@@ -235,7 +258,7 @@ func (deps *endpointDeps) Auction(w http.ResponseWriter, r *http.Request, _ http
 // possible, it will return errors with messages that suggest improvements.
 //
 // If the errors list has at least one element, then no guarantees are made about the returned request.
-func (deps *endpointDeps) parseRequest(httpRequest *http.Request) (req *openrtb_ext.RequestWrapper, impExtInfoMap map[string]exchange.ImpExtInfo, errs []error) {
+func (deps *endpointDeps) parseRequest(httpRequest *http.Request) (req *openrtb_ext.RequestWrapper, impExtInfoMap map[string]exchange.ImpExtInfo, fpData map[string][]byte, errs []error) {
 	req = &openrtb_ext.RequestWrapper{}
 	req.BidRequest = &openrtb2.BidRequest{}
 	errs = nil
@@ -264,6 +287,13 @@ func (deps *endpointDeps) parseRequest(httpRequest *http.Request) (req *openrtb_
 
 	// Fetch the Stored Request data and merge it into the HTTP request.
 	if requestJson, impExtInfoMap, errs = deps.processStoredRequests(ctx, requestJson); len(errs) > 0 {
+		return
+	}
+
+	//If {site,app,user}.data exists, merge it into {site,app,user}.ext.data and remove {site,app,user}.data
+	requestJson, fpData, err = firstpartydata.GetFPDData(requestJson)
+	if err != nil {
+		errs = []error{err}
 		return
 	}
 
@@ -303,6 +333,44 @@ func parseTimeout(requestJson []byte, defaultTimeout time.Duration) time.Duratio
 		}
 	}
 	return defaultTimeout
+}
+
+func (deps *endpointDeps) validateFpdRequest(bidRequest *openrtb2.BidRequest, fpdBiddersData map[openrtb_ext.BidderName]*openrtb_ext.FPDData) (map[openrtb_ext.BidderName]*openrtb_ext.FPDData, []error) {
+
+	errL := make([]error, 0)
+	validatedFpdData := make(map[openrtb_ext.BidderName]*openrtb_ext.FPDData)
+
+	for bidderName, fpdBidderData := range fpdBiddersData {
+		tempBidRequest := *bidRequest //copy of bid request to validate FPD
+
+		if fpdBidderData.Site != nil {
+			tempBidRequest.Site = fpdBidderData.Site
+		}
+		if fpdBidderData.App != nil {
+			tempBidRequest.App = fpdBidderData.App
+		}
+		if fpdBidderData.User != nil {
+			tempBidRequest.User = fpdBidderData.User
+		}
+
+		tempRequestWrapper := &openrtb_ext.RequestWrapper{BidRequest: &tempBidRequest}
+		errsList := deps.validateRequest(tempRequestWrapper)
+
+		if len(errsList) == 0 {
+			//valid fpd bidder config - will need to apply it to request
+			validatedFpdData[bidderName] = fpdBidderData
+		} else {
+			//return validation error as InvalidFirstPartyDataWarning
+			for _, fpdValidationError := range errsList {
+				firstPartyDataWarning := errortypes.Warning{
+					WarningCode: errortypes.InvalidFirstPartyDataWarningCode,
+					Message:     fmt.Sprintf("Invalid first party data for bidder %s: %s", bidderName, fpdValidationError),
+				}
+				errL = append(errL, &firstPartyDataWarning)
+			}
+		}
+	}
+	return validatedFpdData, errL
 }
 
 func (deps *endpointDeps) validateRequest(req *openrtb_ext.RequestWrapper) []error {
@@ -360,6 +428,10 @@ func (deps *endpointDeps) validateRequest(req *openrtb_ext.RequestWrapper) []err
 		}
 
 		if err := validateCustomRates(reqPrebid.CurrencyConversions); err != nil {
+			return []error{err}
+		}
+
+		if err := firstpartydata.ValidateFPDConfig(*reqPrebid); err != nil {
 			return []error{err}
 		}
 	}

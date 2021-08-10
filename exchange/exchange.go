@@ -31,7 +31,11 @@ import (
 
 type ContextKey string
 
-const DebugContextKey = ContextKey("debugInfo")
+const (
+	DebugContextKey = ContextKey("debugInfo")
+	bidderconfig    = "bidderconfig"
+	data            = "data"
+)
 
 type extCacheInstructions struct {
 	cacheBids, cacheVAST, returnCreative bool
@@ -154,7 +158,8 @@ type AuctionRequest struct {
 
 	// LegacyLabels is included here for temporary compatability with cleanOpenRTBRequests
 	// in HoldAuction until we get to factoring it away. Do not use for anything new.
-	LegacyLabels metrics.Labels
+	LegacyLabels   metrics.Labels
+	FirstPartyData map[openrtb_ext.BidderName]*openrtb_ext.FPDData
 }
 
 // BidderRequest holds the bidder specific request and all other
@@ -215,7 +220,7 @@ func (e *exchange) HoldAuction(ctx context.Context, r AuctionRequest, debugLog *
 	// Get currency rates conversions for the auction
 	conversions := e.getAuctionCurrencyRates(requestExt.Prebid.CurrencyConversions)
 
-	adapterBids, adapterExtra, anyBidsReturned := e.getAllBids(auctionCtx, bidderRequests, bidAdjustmentFactors, conversions, r.Account.DebugAllow, r.GlobalPrivacyControlHeader, debugLog.DebugOverride)
+	adapterBids, adapterExtra, anyBidsReturned := e.getAllBids(auctionCtx, bidderRequests, bidAdjustmentFactors, conversions, r.Account.DebugAllow, r.GlobalPrivacyControlHeader, debugLog.DebugOverride, r.FirstPartyData)
 
 	var auc *auction
 	var cacheErrs []error
@@ -426,7 +431,8 @@ func (e *exchange) getAllBids(
 	conversions currency.Conversions,
 	accountDebugAllowed bool,
 	globalPrivacyControlHeader string,
-	headerDebugAllowed bool) (
+	headerDebugAllowed bool,
+	fpdData map[openrtb_ext.BidderName]*openrtb_ext.FPDData) (
 	map[openrtb_ext.BidderName]*pbsOrtbSeatBid,
 	map[openrtb_ext.BidderName]*seatResponseExtra, bool) {
 	// Set up pointers to the bid results
@@ -449,6 +455,19 @@ func (e *exchange) getAllBids(
 			defer func() {
 				e.me.RecordAdapterRequest(bidderRequest.BidderLabels)
 			}()
+
+			if fpdData != nil && fpdData[bidderRequest.BidderName] != nil {
+				if fpdData[bidderRequest.BidderName].Site != nil {
+					bidderRequest.BidRequest.Site = fpdData[bidderRequest.BidderName].Site
+				}
+				if fpdData[bidderRequest.BidderName].App != nil {
+					bidderRequest.BidRequest.App = fpdData[bidderRequest.BidderName].App
+				}
+				if fpdData[bidderRequest.BidderName].User != nil {
+					bidderRequest.BidRequest.User = fpdData[bidderRequest.BidderName].User
+				}
+			}
+
 			start := time.Now()
 
 			adjustmentFactor := 1.0

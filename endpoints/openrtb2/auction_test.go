@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
+	"github.com/evanphx/json-patch"
 	"github.com/mxmCherry/openrtb/v15/native1"
 	nativeRequests "github.com/mxmCherry/openrtb/v15/native1/request"
 	"github.com/mxmCherry/openrtb/v15/openrtb2"
@@ -2727,6 +2728,268 @@ func TestValidateNativeAssetData(t *testing.T) {
 			assert.EqualError(t, err, test.expectedError, test.description)
 		}
 	}
+}
+
+func TestParseRequestFPD(t *testing.T) {
+	deps := &endpointDeps{
+		&warningsCheckExchange{},
+		newParamsValidator(t),
+		&mockStoredReqFetcher{},
+		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
+		nil,
+		newTestMetrics(),
+		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
+		map[string]string{},
+		false,
+		[]byte{},
+		openrtb_ext.BuildBidderMap(),
+		nil,
+		nil,
+		hardcodedResponseIPValidator{response: true},
+	}
+
+	expectedFpd := map[string]map[string][]byte{
+		"fpd-site-user.json": {
+			"site": []byte(`{"someSiteFpd": "siteFpdDataTest"}`),
+			"user": []byte(`{"someUserFpd": "userFpdDataTest"}`),
+			"app":  []byte(``),
+		},
+		"fpd-site.json": {
+			"site": []byte(`{"someSiteFpd": "siteFpdDataTest"}`),
+			"user": []byte(``),
+			"app":  []byte(``),
+		},
+		"fpd-app-user.json": {
+			"site": []byte(``),
+			"user": []byte(`{"someUserFpd": "userFpdDataTest"}`),
+			"app":  []byte(`{"someAppFpd": "appFpdDataTest"}`),
+		},
+		"fpd-user.json": {
+			"site": []byte(``),
+			"user": []byte(`{"someUserFpd": "userFpdDataTest"}`),
+			"app":  []byte(``),
+		},
+		"no-fpd.json": {
+			"site": []byte(``),
+			"user": []byte(``),
+			"app":  []byte(``),
+		},
+	}
+
+	if specFiles, err := ioutil.ReadDir("sample-requests/valid-whole/supplementary/firstPartyData"); err == nil {
+		for _, specFile := range specFiles {
+			reqBody := validRequest(t, fmt.Sprintf("firstPartyData/%s", specFile.Name()))
+			deps.cfg = &config.Configuration{MaxRequestSize: int64(len(reqBody))}
+			req := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(reqBody))
+			_, fpData, errL := deps.parseRequest(req)
+
+			assert.Len(t, errL, 0, "No errors expected")
+			assert.Equal(t, expectedFpd[specFile.Name()], fpData, "Request is incorrect")
+		}
+	}
+}
+
+func TestValidateFPDBidders(t *testing.T) {
+	deps := &endpointDeps{
+		&warningsCheckExchange{},
+		newParamsValidator(t),
+		&mockStoredReqFetcher{},
+		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
+		nil,
+		newTestMetrics(),
+		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
+		map[string]string{},
+		false,
+		[]byte{},
+		openrtb_ext.BuildBidderMap(),
+		nil,
+		nil,
+		hardcodedResponseIPValidator{response: true},
+	}
+
+	expectedFpdBiddersValidationErrors := map[string]string{
+		"fpd-bidders-valid.json":                  "",
+		"fpd-bidders-valid-no-fpd.json":           "",
+		"fpd-bidders-invalid-no-global.json":      "[request.ext.prebid.data.bidders are not specified but reqExtPrebid.BidderConfigs are]",
+		"fpd-bidders-invalid-no-bidder-conf.json": "[request.ext.prebid.data.bidders are specified but reqExtPrebid.BidderConfigs are not]",
+	}
+
+	if specFiles, err := ioutil.ReadDir("sample-requests/valid-whole/supplementary/firstPartyDataBidders"); err == nil {
+		for _, specFile := range specFiles {
+			reqBody := validRequest(t, fmt.Sprintf("firstPartyDataBidders/%s", specFile.Name()))
+			deps.cfg = &config.Configuration{MaxRequestSize: int64(len(reqBody))}
+			req := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(reqBody))
+			_, _, errL := deps.parseRequest(req)
+
+			err := expectedFpdBiddersValidationErrors[specFile.Name()]
+			if err == "" {
+				assert.Len(t, errL, 0, "No errors expected after parse request")
+			} else {
+				assert.True(t, strings.Contains(err, errL[0].Error()), "Incorrect error message")
+			}
+
+		}
+	}
+}
+func TestValidateFpdRequest(t *testing.T) {
+	deps := &endpointDeps{
+		&warningsCheckExchange{},
+		newParamsValidator(t),
+		&mockStoredReqFetcher{},
+		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
+		&config.Configuration{},
+		newTestMetrics(),
+		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
+		map[string]string{},
+		false,
+		[]byte{},
+		openrtb_ext.BuildBidderMap(),
+		nil,
+		nil,
+		hardcodedResponseIPValidator{response: true},
+	}
+	if specFiles, err := ioutil.ReadDir("./firstpartydata/tests/validatefpd"); err == nil {
+		for _, specFile := range specFiles {
+			fileName := "./firstpartydata/tests/validatefpd/" + specFile.Name()
+
+			fpdFile, err := loadFpdFile(fileName)
+			if err != nil {
+				t.Errorf("Unable to load file: %s", fileName)
+			}
+
+			var inputReq openrtb2.BidRequest
+			err = json.Unmarshal(fpdFile.InputRequestData, &inputReq)
+			if err != nil {
+				t.Errorf("Unable to unmarshal input request: %s", fileName)
+			}
+
+			var inputReqCopy openrtb2.BidRequest
+			err = json.Unmarshal(fpdFile.InputRequestData, &inputReqCopy)
+			if err != nil {
+				t.Errorf("Unable to unmarshal input request: %s", fileName)
+			}
+
+			validatedFPD, errL := deps.validateFpdRequest(&inputReq, fpdFile.InputBiddersFPD)
+			assert.Equal(t, inputReq, inputReqCopy, "Original request should not be modified")
+
+			assert.Equalf(t, validatedFPD, fpdFile.ResultBiddersFPD, "Incorrect fpd")
+
+			if len(fpdFile.ValidationErrors) != 0 {
+				assert.Equal(t, len(fpdFile.ValidationErrors), len(errL), "Incorrect number of expected errors")
+
+				//subject to change to for loop
+				for i := range errL {
+					assert.Contains(t, errL[i].Error(), fpdFile.ValidationErrors[i], "Validation Error is incorrect")
+				}
+			} else {
+				assert.Len(t, errL, 0, "Error list should be empty")
+			}
+		}
+	}
+}
+
+func TestFPDHoldAuction(t *testing.T) {
+
+	deps := &endpointDeps{
+		&warningsCheckExchange{},
+		newParamsValidator(t),
+		&mockStoredReqFetcher{},
+		empty_fetcher.EmptyFetcher{},
+		empty_fetcher.EmptyFetcher{},
+		nil,
+		newTestMetrics(),
+		analyticsConf.NewPBSAnalytics(&config.Analytics{}),
+		map[string]string{},
+		false,
+		[]byte{},
+		openrtb_ext.BuildBidderMap(),
+		nil,
+		nil,
+		hardcodedResponseIPValidator{response: true},
+	}
+
+	if specFiles, err := ioutil.ReadDir("./firstpartydata/tests/holdauction"); err == nil {
+		for _, specFile := range specFiles {
+			fileName := "./firstpartydata/tests/holdauction/" + specFile.Name()
+
+			fpdFile, err := loadFpdFile(fileName)
+			if err != nil {
+				t.Errorf("Unable to load file: %s", fileName)
+			}
+
+			var resRequest openrtb2.BidRequest
+			err = json.Unmarshal(fpdFile.ResultRequestData, &resRequest)
+			if err != nil {
+				t.Errorf("Unable to unmarshal input request: %s", fileName)
+			}
+
+			reqBody := string(fpdFile.InputRequestData)
+			deps.cfg = &config.Configuration{MaxRequestSize: int64(len(reqBody))}
+
+			req := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(reqBody))
+			recorder := httptest.NewRecorder()
+
+			deps.Auction(recorder, req, nil)
+
+			if recorder.Code != http.StatusOK {
+				t.Errorf("Endpoint should return a 200")
+			}
+
+			actualRequest := deps.ex.(*warningsCheckExchange).auctionRequest
+
+			assert.Equal(t, len(actualRequest.FirstPartyData), len(fpdFile.ResultBiddersFPD))
+
+			for k, expectedValue := range fpdFile.ResultBiddersFPD {
+				actualValue := actualRequest.FirstPartyData[k]
+
+				if expectedValue.Site != nil {
+					assert.Equal(t, expectedValue.Site, actualValue.Site, "Incorrect first party data")
+					assert.Equal(t, resRequest.Site, actualRequest.BidRequest.Site, "Incorrect site in request")
+				}
+				if expectedValue.App != nil {
+					assert.Equal(t, expectedValue.App, actualValue.App, "Incorrect first party data")
+					assert.Equal(t, resRequest.App, actualRequest.BidRequest.App, "Incorrect app in request")
+				}
+				if expectedValue.User != nil {
+					assert.Equal(t, expectedValue.User, actualValue.User, "Incorrect first party data")
+					assert.Equal(t, resRequest.User, actualRequest.BidRequest.User, "Incorrect user in request")
+				}
+			}
+
+			if len(fpdFile.ValidationErrors) > 0 {
+				assert.Equal(t, len(fpdFile.ValidationErrors), len(actualRequest.Warnings))
+				for i := range fpdFile.ValidationErrors {
+					assert.Contains(t, actualRequest.Warnings[i].Error(), fpdFile.ValidationErrors[i], "Incorrect first party data warning message")
+				}
+			}
+
+		}
+	}
+}
+
+func loadFpdFile(filename string) (fpdFile, error) {
+	var fileData fpdFile
+	fileContents, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return fileData, err
+	}
+	err = json.Unmarshal(fileContents, &fileData)
+	if err != nil {
+		return fileData, err
+	}
+
+	return fileData, nil
+}
+
+type fpdFile struct {
+	InputRequestData  json.RawMessage                                 `json:"inputRequestData,omitempty"`
+	ResultRequestData json.RawMessage                                 `json:"resultRequestData,omitempty"`
+	InputBiddersFPD   map[openrtb_ext.BidderName]*openrtb_ext.FPDData `json:"inputBiddersFPD,omitempty"`
+	ResultBiddersFPD  map[openrtb_ext.BidderName]*openrtb_ext.FPDData `json:"resultBiddersFPD,omitempty"`
+	ValidationErrors  []string                                        `json:"validationErrors,omitempty"`
 }
 
 // warningsCheckExchange is a well-behaved exchange which stores all incoming warnings.

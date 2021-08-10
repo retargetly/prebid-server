@@ -21,6 +21,7 @@ const (
 	AccountLevelDebugDisabledWarningCode
 	BidderLevelDebugDisabledWarningCode
 	DisabledCurrencyConversionWarningCode
+	InvalidFirstPartyDataWarningCode //this code doesn't have specific value, keep it at the bottom
 )
 
 // Coder provides an error or warning code with severity.
