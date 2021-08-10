@@ -136,8 +136,7 @@ func (deps *endpointDeps) Auction(w http.ResponseWriter, r *http.Request, _ http
 		deps.analytics.LogAuctionObject(&ao)
 	}()
 
-	req, impExtInfoMap, errL := deps.parseRequest(r)
-	req, fpdData, errL := deps.parseRequest(r)
+	req, impExtInfoMap, fpdData, errL := deps.parseRequest(r)
 
 	var resolvedFPD map[openrtb_ext.BidderName]*openrtb_ext.FPDData
 	reqExt, _ := req.GetRequestExt()

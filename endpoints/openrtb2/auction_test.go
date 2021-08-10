@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/buger/jsonparser"
-	"github.com/evanphx/json-patch"
 	"github.com/mxmCherry/openrtb/v15/native1"
 	nativeRequests "github.com/mxmCherry/openrtb/v15/native1/request"
 	"github.com/mxmCherry/openrtb/v15/openrtb2"
@@ -2782,7 +2781,7 @@ func TestParseRequestFPD(t *testing.T) {
 			reqBody := validRequest(t, fmt.Sprintf("firstPartyData/%s", specFile.Name()))
 			deps.cfg = &config.Configuration{MaxRequestSize: int64(len(reqBody))}
 			req := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(reqBody))
-			_, fpData, errL := deps.parseRequest(req)
+			_, _, fpData, errL := deps.parseRequest(req)
 
 			assert.Len(t, errL, 0, "No errors expected")
 			assert.Equal(t, expectedFpd[specFile.Name()], fpData, "Request is incorrect")
@@ -2821,7 +2820,7 @@ func TestValidateFPDBidders(t *testing.T) {
 			reqBody := validRequest(t, fmt.Sprintf("firstPartyDataBidders/%s", specFile.Name()))
 			deps.cfg = &config.Configuration{MaxRequestSize: int64(len(reqBody))}
 			req := httptest.NewRequest("POST", "/openrtb2/auction", strings.NewReader(reqBody))
-			_, _, errL := deps.parseRequest(req)
+			_, _, _, errL := deps.parseRequest(req)
 
 			err := expectedFpdBiddersValidationErrors[specFile.Name()]
 			if err == "" {
