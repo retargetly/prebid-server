@@ -456,17 +456,7 @@ func (e *exchange) getAllBids(
 				e.me.RecordAdapterRequest(bidderRequest.BidderLabels)
 			}()
 
-			if fpdData != nil && fpdData[bidderRequest.BidderName] != nil {
-				if fpdData[bidderRequest.BidderName].Site != nil {
-					bidderRequest.BidRequest.Site = fpdData[bidderRequest.BidderName].Site
-				}
-				if fpdData[bidderRequest.BidderName].App != nil {
-					bidderRequest.BidRequest.App = fpdData[bidderRequest.BidderName].App
-				}
-				if fpdData[bidderRequest.BidderName].User != nil {
-					bidderRequest.BidRequest.User = fpdData[bidderRequest.BidderName].User
-				}
-			}
+			applyFPD(fpdData, bidderRequest.BidRequest, bidderRequest.BidderName)
 
 			start := time.Now()
 
@@ -526,6 +516,20 @@ func (e *exchange) getAllBids(
 	}
 
 	return adapterBids, adapterExtra, bidsFound
+}
+
+func applyFPD(fpdData map[openrtb_ext.BidderName]*openrtb_ext.FPDData, bidReq *openrtb2.BidRequest, bidderName openrtb_ext.BidderName) {
+	if fpdData != nil && fpdData[bidderName] != nil {
+		if fpdData[bidderName].Site != nil {
+			bidReq.Site = fpdData[bidderName].Site
+		}
+		if fpdData[bidderName].App != nil {
+			bidReq.App = fpdData[bidderName].App
+		}
+		if fpdData[bidderName].User != nil {
+			bidReq.User = fpdData[bidderName].User
+		}
+	}
 }
 
 func (e *exchange) recoverSafely(bidderRequests []BidderRequest,
