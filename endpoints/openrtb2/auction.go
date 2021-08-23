@@ -138,24 +138,9 @@ func (deps *endpointDeps) Auction(w http.ResponseWriter, r *http.Request, _ http
 
 	req, impExtInfoMap, fpdData, errL := deps.parseRequest(r)
 
-	var resolvedFPD map[openrtb_ext.BidderName]*openrtb_ext.FPDData
-	reqExt, _ := req.GetRequestExt()
-	if reqExt != nil {
-		if reqExt.GetPrebid() != nil {
-			fpdBidderData, reqExtPrebid := firstpartydata.PreprocessFPD(*reqExt.GetPrebid())
-			reqExt.SetPrebid(&reqExtPrebid)
-
-			var fpdErrors []error
-			initialFPD, buildFpdErr := firstpartydata.BuildFPD(req.BidRequest, fpdBidderData, fpdData)
-			if len(buildFpdErr) > 0 {
-				errL = append(errL, buildFpdErr...)
-			} else {
-				resolvedFPD, fpdErrors = deps.validateFpdRequest(req.BidRequest, initialFPD)
-				if len(fpdErrors) > 0 {
-					errL = append(errL, fpdErrors...)
-				}
-			}
-		}
+	resolvedFPD, fpdErrors := processFPD(deps, req, fpdData)
+	if len(fpdErrors) > 0 {
+		errL = append(errL, fpdErrors...)
 	}
 
 	if errortypes.ContainsFatalError(errL) && writeError(errL, w, &labels) {
@@ -1637,4 +1622,28 @@ func getAccountID(pub *openrtb2.Publisher) string {
 		}
 	}
 	return metrics.PublisherUnknown
+}
+
+func processFPD(deps *endpointDeps, req *openrtb_ext.RequestWrapper, fpdData map[string][]byte) (map[openrtb_ext.BidderName]*openrtb_ext.FPDData, []error) {
+	errL := []error{}
+	var resolvedFPD map[openrtb_ext.BidderName]*openrtb_ext.FPDData
+	reqExt, _ := req.GetRequestExt()
+	if reqExt != nil {
+		if reqExt.GetPrebid() != nil {
+			fpdBidderData, reqExtPrebid := firstpartydata.PreprocessFPD(*reqExt.GetPrebid())
+			reqExt.SetPrebid(&reqExtPrebid)
+
+			var fpdErrors []error
+			initialFPD, buildFpdErr := firstpartydata.BuildFPD(req.BidRequest, fpdBidderData, fpdData)
+			if len(buildFpdErr) > 0 {
+				errL = append(errL, buildFpdErr...)
+			} else {
+				resolvedFPD, fpdErrors = deps.validateFpdRequest(req.BidRequest, initialFPD)
+				if len(fpdErrors) > 0 {
+					errL = append(errL, fpdErrors...)
+				}
+			}
+		}
+	}
+	return resolvedFPD, errL
 }
