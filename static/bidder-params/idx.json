@@ -1,0 +1,31 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "title": "IDx Adapter Params",
+    "description": "A schema which validates params accepted by the IDx adapter",
+    "type": "object",
+    "properties": {
+        "host": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Host"
+        },
+        "ad_space_id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "An ID which identifies the Ad Space"
+        },
+        "seller_id": {
+			"type": "string",
+            "minLength": 1,
+			"description": "An ID which identifies the Seller"
+		},
+        "ssp_id": {
+			"type": "string",
+            "minLength": 1,
+			"description": "An ID which identifies the SSP"
+		}
+    },
+    "required": [
+        "ad_space_id"
+    ]
+}
