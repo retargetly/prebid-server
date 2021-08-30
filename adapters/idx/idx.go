@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"text/template"
 
-	openrtb "github.com/mxmCherry/openrtb/v15/openrtb2"
+	"github.com/mxmCherry/openrtb/v15/openrtb2"
 	"github.com/prebid/prebid-server/adapters"
 	"github.com/prebid/prebid-server/config"
 	"github.com/prebid/prebid-server/errortypes"
@@ -33,7 +33,7 @@ func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters
 	return bidder, nil
 }
 
-func (a *IDxAdapter) MakeRequests(request *openrtb.BidRequest, requestInfo *adapters.ExtraRequestInfo) ([]*adapters.RequestData, []error) {
+func (a *IDxAdapter) MakeRequests(request *openrtb2.BidRequest, requestInfo *adapters.ExtraRequestInfo) ([]*adapters.RequestData, []error) {
 	impressions := request.Imp
 	result := make([]*adapters.RequestData, 0, len(impressions))
 	errs := make([]error, 0, len(impressions))
@@ -90,9 +90,23 @@ func (a *IDxAdapter) MakeRequests(request *openrtb.BidRequest, requestInfo *adap
 			continue
 		}
 
+		impression.Ext = nil
 		request.Ext = idxExtReq
 
-		request.Imp = []openrtb.Imp{impression}
+		// Get enabled extended ids
+		extUser, errsExtUser := getEnabledUserIds(request)
+		if errsExtUser != nil {
+			errs = append(errs, errsExtUser...)
+		}
+
+		extUserBody, err := json.Marshal(&extUser)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		request.User.Ext = extUserBody
+
+		request.Imp = []openrtb2.Imp{impression}
 		body, err := json.Marshal(request)
 		if err != nil {
 			errs = append(errs, err)
@@ -112,7 +126,7 @@ func (a *IDxAdapter) MakeRequests(request *openrtb.BidRequest, requestInfo *adap
 	return result, errs
 }
 
-func (a *IDxAdapter) MakeBids(request *openrtb.BidRequest, requestData *adapters.RequestData, responseData *adapters.ResponseData) (*adapters.BidderResponse, []error) {
+func (a *IDxAdapter) MakeBids(request *openrtb2.BidRequest, requestData *adapters.RequestData, responseData *adapters.ResponseData) (*adapters.BidderResponse, []error) {
 	if responseData.StatusCode == http.StatusNoContent {
 		return nil, nil
 	}
@@ -124,7 +138,7 @@ func (a *IDxAdapter) MakeBids(request *openrtb.BidRequest, requestData *adapters
 		return nil, []error{err}
 	}
 
-	var response openrtb.BidResponse
+	var response openrtb2.BidResponse
 	if err := json.Unmarshal(responseData.Body, &response); err != nil {
 		return nil, []error{err}
 	}
@@ -187,7 +201,7 @@ func (a *IDxAdapter) getUrl(host string) (string, error) {
 	return uri.String(), nil
 }
 
-func getMediaTypeForImp(impID string, imps []openrtb.Imp) *openrtb_ext.BidType {
+func getMediaTypeForImp(impID string, imps []openrtb2.Imp) *openrtb_ext.BidType {
 	mediaType := openrtb_ext.BidTypeBanner
 
 	for _, imp := range imps {
