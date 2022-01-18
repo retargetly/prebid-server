@@ -8,24 +8,7 @@
             "type": "string",
             "minLength": 1,
             "description": "Host"
-        },
-        "ad_space_id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "An ID which identifies the Ad Space"
-        },
-        "seller_id": {
-			"type": "string",
-            "minLength": 1,
-			"description": "An ID which identifies the Seller"
-		},
-        "ssp_id": {
-			"type": "string",
-            "minLength": 1,
-			"description": "An ID which identifies the SSP"
-		}
+        }
     },
-    "required": [
-        "ad_space_id"
-    ]
+    "required": []
 }

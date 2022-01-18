@@ -797,7 +797,7 @@ func SetupViper(v *viper.Viper, filename string) {
 	v.SetDefault("adapters.gamoshi.endpoint", "https://rtb.gamoshi.io")
 	v.SetDefault("adapters.grid.endpoint", "https://grid.bidswitch.net/sp_bid?sp=prebid")
 	v.SetDefault("adapters.gumgum.endpoint", "https://g2.gumgum.com/providers/prbds2s/bid")
-	v.SetDefault("adapters.idx.endpoint", "http://eu-dc1.smowtion.net/request/rtb")
+	v.SetDefault("adapters.idx.endpoint", "http://exchange.smowtion.net/rtb/bids/idx")
 	v.SetDefault("adapters.improvedigital.endpoint", "http://ad.360yield.com/pbs")
 	v.SetDefault("adapters.inmobi.endpoint", "https://api.w.inmobi.com/showad/openrtb/bidder/prebid")
 	v.SetDefault("adapters.interactiveoffers.endpoint", "https://prebid-server.ioadx.com/bidRequest/?partnerId=d9e56d418c4825d466ee96c7a31bf1da6b62fa04")

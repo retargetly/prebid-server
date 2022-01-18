@@ -1,6 +1,6 @@
 maintainer:
   email: none@retargetly.com
-gvlVendorID: 0
+modifyingVastXmlAllowed: true
 capabilities:
   app:
     mediaTypes:

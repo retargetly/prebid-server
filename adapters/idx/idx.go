@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"text/template"
 
 	"github.com/mxmCherry/openrtb/v15/openrtb2"
@@ -34,99 +36,85 @@ func Builder(bidderName openrtb_ext.BidderName, config config.Adapter) (adapters
 }
 
 func (a *IDxAdapter) MakeRequests(request *openrtb2.BidRequest, requestInfo *adapters.ExtraRequestInfo) ([]*adapters.RequestData, []error) {
-	impressions := request.Imp
-	result := make([]*adapters.RequestData, 0, len(impressions))
-	errs := make([]error, 0, len(impressions))
-
-	headers := getRequestHeaders()
-
-	for _, impression := range impressions {
-		if impression.Banner != nil {
-			banner := impression.Banner
-			if banner.W == nil && banner.H == nil {
-				if banner.Format == nil {
-					errs = append(errs, &errortypes.BadInput{
-						Message: "Impression with id: " + impression.ID + " has following error: Banner width and height is not provided and banner format is missing. At least one is required",
-					})
-					continue
-				}
-				if len(banner.Format) == 0 {
-					errs = append(errs, &errortypes.BadInput{
-						Message: "Impression with id: " + impression.ID + " has following error: Banner width and height is not provided and banner format array is empty. At least one is required",
-					})
-					continue
-				}
-			}
-
-		}
-
-		// Parse bidder extra params
-		var bidderExt adapters.ExtImpBidder
-		err := json.Unmarshal(impression.Ext, &bidderExt)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-
-		// Parse IDx params present on bidder extra params
-		var impressionExt openrtb_ext.ExtImpIDx
-		err = json.Unmarshal(bidderExt.Bidder, &impressionExt)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-
-		// Get url using impression host
-		url, err := a.getUrl(impressionExt.Host)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-
-		impressionExt.Host = ""
-		idxExtReq, err := json.Marshal(impressionExt)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-
-		impression.Ext = nil
-		request.Ext = idxExtReq
-
-		// Get enabled extended ids
-		extUser, errsExtUser := getEnabledUserIds(request)
-		if errsExtUser != nil {
-			errs = append(errs, errsExtUser...)
-		}
-
-		extUserBody, err := json.Marshal(&extUser)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		request.User.Ext = extUserBody
-
-		request.Imp = []openrtb2.Imp{impression}
-		body, err := json.Marshal(request)
-		if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-
-		result = append(result, &adapters.RequestData{
-			Method:  "POST",
-			Uri:     url,
-			Body:    body,
-			Headers: headers,
-		})
+	requestJSON, err := json.Marshal(request)
+	if err != nil {
+		return nil, []error{err}
 	}
 
-	request.Imp = impressions
+	url, err := a.getUrl("")
+	if err != nil {
+		return nil, []error{err}
+	}
 
-	return result, errs
+	requestData := &adapters.RequestData{
+		Method: "POST",
+		Uri:    url,
+		Body:   requestJSON,
+	}
+
+	return []*adapters.RequestData{requestData}, nil
 }
 
 func (a *IDxAdapter) MakeBids(request *openrtb2.BidRequest, requestData *adapters.RequestData, responseData *adapters.ResponseData) (*adapters.BidderResponse, []error) {
+	if responseData.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+
+	if responseData.StatusCode == http.StatusBadRequest {
+		err := &errortypes.BadInput{
+			Message: "Unexpected status code: 400. Bad request from publisher. Run with request.debug = 1 for more info.",
+		}
+		return nil, []error{err}
+	}
+
+	if responseData.StatusCode != http.StatusOK {
+		err := &errortypes.BadServerResponse{
+			Message: fmt.Sprintf("Unexpected status code: %d. Run with request.debug = 1 for more info.", responseData.StatusCode),
+		}
+		return nil, []error{err}
+	}
+
+	var response openrtb2.BidResponse
+	if err := json.Unmarshal(responseData.Body, &response); err != nil {
+		return nil, []error{err}
+	}
+
+	bidResponse := adapters.NewBidderResponseWithBidsCapacity(len(request.Imp))
+	bidResponse.Currency = response.Cur
+	for _, seatBid := range response.SeatBid {
+		for i := range seatBid.Bid {
+			price := strconv.FormatFloat(seatBid.Bid[i].Price, 'f', -1, 64)
+			seatBid.Bid[i].AdM = strings.Replace(seatBid.Bid[i].AdM, "${AUCTION_PRICE}", price, -1)
+			seatBid.Bid[i].NURL = strings.Replace(seatBid.Bid[i].NURL, "${AUCTION_PRICE}", price, -1)
+
+			b := &adapters.TypedBid{
+				Bid:     &seatBid.Bid[i],
+				BidType: getMediaTypeForImp(seatBid.Bid[i].ImpID, request.Imp),
+			}
+
+			bidResponse.Bids = append(bidResponse.Bids, b)
+		}
+	}
+	return bidResponse, nil
+}
+
+func getMediaTypeForImp(impID string, imps []openrtb2.Imp) openrtb_ext.BidType {
+	mediaType := openrtb_ext.BidTypeBanner
+	for _, imp := range imps {
+		if imp.ID == impID {
+			if imp.Banner == nil && imp.Video != nil {
+				mediaType = openrtb_ext.BidTypeVideo
+			} else if imp.Banner == nil && imp.Native != nil {
+				mediaType = openrtb_ext.BidTypeNative
+			}
+		}
+	}
+
+	return mediaType
+}
+
+/*func (a *IDxAdapter) MakeBids(request *openrtb2.BidRequest, requestData *adapters.RequestData, responseData *adapters.ResponseData) (*adapters.BidderResponse, []error) {
+	fmt.Printf("\nStatus code: %d", responseData.StatusCode)
 	if responseData.StatusCode == http.StatusNoContent {
 		return nil, nil
 	}
@@ -138,9 +126,22 @@ func (a *IDxAdapter) MakeBids(request *openrtb2.BidRequest, requestData *adapter
 		return nil, []error{err}
 	}
 
-	var response openrtb2.BidResponse
-	if err := json.Unmarshal(responseData.Body, &response); err != nil {
-		return nil, []error{err}
+	response := openrtb2.BidResponse{
+		ID:  request.ID,
+		Cur: "USD",
+		SeatBid: []openrtb2.SeatBid{
+			{
+				Bid: []openrtb2.Bid{
+					{
+						ID:    request.ID,
+						ImpID: request.Imp[0].ID,
+						CrID:  "banner:5",
+						AdM:   string(responseData.Body),
+						Price: 0.2,
+					},
+				},
+			},
+		},
 	}
 
 	bidsCapacity := len(request.Imp)
@@ -150,25 +151,15 @@ func (a *IDxAdapter) MakeBids(request *openrtb2.BidRequest, requestData *adapter
 	var errs []error
 	for _, seatBid := range response.SeatBid {
 		for _, bid := range seatBid.Bid {
-			fmt.Println("bid")
-			bid := bid
-			bidType := getMediaTypeForImp(bid.ImpID, request.Imp)
-			if bidType == nil {
-				errs = append(errs, &errortypes.BadServerResponse{
-					Message: "ignoring bid id=" + bid.ID + ", request doesn't contain any valid impression with id=" + bid.ImpID,
-				})
-				continue
-			}
-
 			bidResponse.Bids = append(bidResponse.Bids, &adapters.TypedBid{
 				Bid:     &bid,
-				BidType: *bidType,
+				BidType: openrtb_ext.BidTypeBanner,
 			})
 		}
 	}
 
 	return bidResponse, errs
-}
+}*/
 
 // getRequestHeaders returns the http headers to make the bid request
 func getRequestHeaders() http.Header {
@@ -199,20 +190,4 @@ func (a *IDxAdapter) getUrl(host string) (string, error) {
 	}
 
 	return uri.String(), nil
-}
-
-func getMediaTypeForImp(impID string, imps []openrtb2.Imp) *openrtb_ext.BidType {
-	mediaType := openrtb_ext.BidTypeBanner
-
-	for _, imp := range imps {
-		if imp.ID == impID {
-			if imp.Banner == nil && imp.Video != nil {
-				mediaType = openrtb_ext.BidTypeVideo
-			}
-
-			return &mediaType
-		}
-	}
-
-	return nil
 }
